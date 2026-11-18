@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SecureVault Demo</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1d2330;--mut:#667085;--bd:#d9dde5;--ac:#1f6feb;--ok:#127a3d;--bad:#b42318;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#12161d;--card:#1b212b;--tx:#e6e9ef;--mut:#9aa4b2;--bd:#2c3542;--ac:#58a6ff;--ok:#3fb950;--bad:#f85149;color-scheme:dark}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:1rem}
+h1{font-size:1.3rem;margin:.2rem 0}h3{margin:.2rem 0 .6rem;font-size:1.05rem}
+.sub{color:var(--mut);margin:0 0 1rem}
+nav{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem}
+nav button{padding:.45rem .8rem;border:1px solid var(--bd);background:var(--card);color:var(--tx);border-radius:6px;cursor:pointer}
+nav button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:1rem;margin-bottom:1rem}
+input,textarea{width:100%;padding:.5rem;margin:.2rem 0 .7rem;background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:6px;font:inherit}
+button.p{padding:.5rem 1rem;background:var(--ac);color:#fff;border:0;border-radius:6px;cursor:pointer;font:inherit}
+button.s{padding:.4rem .8rem;border:1px solid var(--bd);background:var(--bg);color:var(--tx);border-radius:6px;cursor:pointer;font:inherit}
+code,pre{font-family:ui-monospace,monospace;font-size:.82rem;word-break:break-all;white-space:pre-wrap}
+pre{background:var(--bg);border:1px solid var(--bd);padding:.5rem;border-radius:6px;margin:.4rem 0}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.mut{color:var(--mut)}
+.pol span{display:inline-block;margin-right:.7rem;font-size:.85rem}
+.otp{font-size:1.6rem;letter-spacing:.2em;font-weight:700}
+.row{display:flex;gap:1rem;flex-wrap:wrap}.row>div{flex:1;min-width:240px}
+.tbl{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:.8rem}td,th{border:1px solid var(--bd);padding:4px 6px;text-align:left}
+.atk{display:flex;justify-content:space-between;align-items:center;gap:.5rem;padding:.5rem 0;border-bottom:1px solid var(--bd)}
+.atk:last-child{border:0}.hide{display:none}
+</style></head><body><main>
+<h1>SecureVault <span class="mut">· browser demo</span></h1>
+<p class="sub">A simulation of the Flask app’s security controls, running entirely in your browser with the Web Crypto API. Nothing is sent anywhere.</p>
+<nav id="nav"></nav>
+
+<section id="t-account" class="card">
+ <div id="authBox"></div>
+</section>
+
+<section id="t-records" class="hide">
+ <div class="card"><h3>My confidential records</h3><div id="recList" class="mut">Log in first.</div></div>
+ <div class="card"><h3>Add record</h3>
+  Title<input id="rt"><label>Details (encrypted with AES-GCM before “database” storage)</label><textarea id="rb" rows="3"></textarea>
+  <button class="p" onclick="addRec()">Save</button></div>
+ <div class="card"><h3>What the database actually stores</h3><div id="dbView" class="mut">Nothing yet.</div></div>
+</section>
+
+<section id="t-attacks" class="hide card">
+ <h3>Attack lab</h3><p class="mut">Each button launches an attack against the simulated server. Results appear below and in the audit log.</p>
+ <div class="atk"><span><b>SQL injection</b> on login</span><button class="s" onclick="atk.sqli()">Attack</button></div>
+ <div class="atk"><span><b>Brute force</b> password guessing</span><button class="s" onclick="atk.brute()">Attack</button></div>
+ <div class="atk"><span><b>DDoS</b> request flood (70 requests)</span><button class="s" onclick="atk.flood()">Attack</button></div>
+ <div class="atk"><span><b>Forged JWT</b> (alg=none, role=admin)</span><button class="s" onclick="atk.jwt()">Attack</button></div>
+ <div class="atk"><span><b>Phishing/CSRF</b> form without token</span><button class="s" onclick="atk.csrf()">Attack</button></div>
+ <div class="atk"><span><b>Man-in-the-middle</b> plain HTTP request</span><button class="s" onclick="atk.mitm()">Attack</button></div>
+ <div class="atk"><span><b>Webhook</b> forged signature</span><button class="s" onclick="atk.wh('forged')">Attack</button></div>
+ <div class="atk"><span><b>Webhook</b> replay of old message</span><button class="s" onclick="atk.wh('replay')">Attack</button></div>
+ <div class="atk"><span><b>Webhook</b> legitimate signed message</span><button class="s" onclick="atk.wh('good')">Send</button></div>
+ <div id="atkOut"></div>
+</section>
+
+<section id="t-audit" class="hide card">
+ <h3>Security audit log</h3><div class="tbl"><table><thead><tr><th>Time</th><th>Event</th><th>Detail</th></tr></thead><tbody id="auditBody"></tbody></table></div>
+</section>
+</main>
+<script>
+const $=id=>document.getElementById(id),enc=new TextEncoder(),dec=new TextDecoder();
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const b64u=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const ub64=s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
+const hex=b=>[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');
+const rnd=n=>crypto.getRandomValues(new Uint8Array(n));
+const S=crypto.subtle;
+async function hmac(key,data,hash='SHA-256'){const k=await S.importKey('raw',key,{name:'HMAC',hash},false,['sign']);return S.sign('HMAC',k,typeof data==='string'?enc.encode(data):data)}
+async function pbkdf2(pw,salt){const k=await S.importKey('raw',enc.encode(pw),'PBKDF2',false,['deriveBits']);return hex(await S.deriveBits({name:'PBKDF2',salt,iterations:100000,hash:'SHA-256'},k,256))}
+const JWT_KEY=rnd(32),WH_KEY=rnd(32);let AES;
+(async()=>{AES=await S.generateKey({name:'AES-GCM',length:256},false,['encrypt','decrypt'])})();
+async function aesEnc(t){const iv=rnd(12);return b64u(iv)+'.'+b64u(await S.encrypt({name:'AES-GCM',iv},AES,enc.encode(t)))}
+async function aesDec(s){const[i,c]=s.split('.');return dec.decode(await S.decrypt({name:'AES-GCM',iv:ub64(i)},AES,ub64(c)))}
+// TOTP (RFC 6238)
+async function totp(secret,t=Date.now()){const c=new DataView(new ArrayBuffer(8));c.setUint32(4,Math.floor(t/30000));const h=new Uint8Array(await hmac(secret,c.buffer,'SHA-1')),o=h[19]&15;
+ return String(((h[o]&127)<<24|h[o+1]<<16|h[o+2]<<8|h[o+3])%1e6).padStart(6,'0')}
+// JWT HS256
+async function jwtSign(p){const h=b64u(enc.encode(JSON.stringify({alg:'HS256',typ:'JWT'}))),b=b64u(enc.encode(JSON.stringify(p)));return h+'.'+b+'.'+b64u(await hmac(JWT_KEY,h+'.'+b))}
+async function jwtVerify(t){const[h,b,s]=t.split('.');if(!s)throw'malformed token';if(JSON.parse(dec.decode(ub64(h))).alg!=='HS256')throw'algorithm not allowed';
+ if(b64u(await hmac(JWT_KEY,h+'.'+b))!==s)throw'bad signature';const p=JSON.parse(dec.decode(ub64(b)));if(p.exp<Date.now()/1e3)throw'expired';return p}
+// Rate limiter + state
+const hits={};function limited(name,max,ms){const n=Date.now();hits[name]=(hits[name]||[]).filter(t=>n-t<ms);if(hits[name].length>=max)return true;hits[name].push(n);return false}
+const users={},records=[],auditLog=[];let token=null,pending=null,csrf=b64u(rnd(12));
+function log(ev,d=''){auditLog.unshift([new Date().toLocaleTimeString(),ev,d]);$('auditBody').innerHTML=auditLog.slice(0,60).map(r=>'<tr>'+r.map(x=>'<td>'+esc(x)+'</td>').join('')+'</tr>').join('')}
+const polChecks=[['12+ characters',p=>p.length>=12],['lowercase',p=>/[a-z]/.test(p)],['uppercase',p=>/[A-Z]/.test(p)],['digit',p=>/\d/.test(p)],['symbol',p=>/[^\w\s]/.test(p)]];
+const base32=b=>{const A='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';let bits='',o='';b.forEach(x=>bits+=x.toString(2).padStart(8,'0'));for(let i=0;i<bits.length;i+=5)o+=A[parseInt(bits.slice(i,i+5).padEnd(5,'0'),2)];return o};
+
+// Tabs
+const tabs=[['account','Account'],['records','Records'],['attacks','Attack lab'],['audit','Audit log']];
+$('nav').innerHTML=tabs.map(([k,l])=>`<button id="b-${k}" onclick="show('${k}')">${l}</button>`).join('');
+function show(k){tabs.forEach(([x])=>{$('t-'+x).classList.toggle('hide',x!==k);$('b-'+x).classList.toggle('on',x===k)});if(k==='records')renderRecs()}
+show('account');
+
+// Account views
+function authView(){
+ if(token){const p=JSON.parse(dec.decode(ub64(token.split('.')[1])));
+  $('authBox').innerHTML=`<h3 class="ok">Logged in as ${esc(p.name)} (${p.role})</h3><p class="mut">Your JWT (HS256, 15-minute expiry). In the real app it lives in an HttpOnly, Secure, SameSite=Strict cookie, so page scripts cannot read it.</p><pre>${esc(token)}</pre><pre>${esc(JSON.stringify(p,null,2))}</pre><button class="s" onclick="logout()">Log out</button>`;return}
+ if(pending){$('authBox').innerHTML=`<h3>Step 2 · Multi-factor code</h3><div class="row"><div>Enter the 6-digit code<input id="code" inputmode="numeric"><button class="p" onclick="doMfa()">Verify</button><p id="msg"></p></div>
+  <div class="card"><div class="mut">Simulated authenticator app</div><div class="otp" id="otp">······</div><div class="mut" id="cd"></div></div></div>`;tickOtp();return}
+ $('authBox').innerHTML=`<div class="row"><div><h3>Register</h3>Username<input id="ru" autocomplete="off">Password<input id="rp" type="password" oninput="pol()"><div class="pol" id="pol"></div><br><button class="p" onclick="doReg()">Create account</button><p id="rmsg"></p></div>
+ <div><h3>Login</h3>Username<input id="lu">Password<input id="lp" type="password"><button class="p" onclick="doLogin()">Continue</button><p id="lmsg"></p></div></div>`;pol()}
+function pol(){const p=$('rp')?$('rp').value:'';if($('pol'))$('pol').innerHTML=polChecks.map(([l,f])=>`<span class="${f(p)?'ok':'mut'}">${f(p)?'✔':'○'} ${l}</span>`).join('')}
+async function tickOtp(){if(!pending||!$('otp'))return;$('otp').textContent=await totp(users[pending].secret);$('cd').textContent='refreshes in '+(30-Math.floor(Date.now()/1000)%30)+'s';setTimeout(tickOtp,1000)}
+async function doReg(){const u=$('ru').value.trim(),p=$('rp').value,m=$('rmsg');
+ if(!/^\w{3,30}$/.test(u))return m.innerHTML='<span class="bad">Username: 3–30 letters, digits or underscore.</span>';
+ if(!polChecks.every(([,f])=>f(p)))return m.innerHTML='<span class="bad">Password does not meet the policy.</span>';
+ if(users[u])return m.innerHTML='<span class="bad">Username already taken.</span>';
+ const salt=rnd(16);users[u]={salt,hash:await pbkdf2(p,salt),secret:rnd(10),role:Object.keys(users).length?'user':'admin',failed:0,lock:0};
+ log('REGISTER',u);m.innerHTML=`<span class="ok">Created. Password stored only as a salted PBKDF2 hash: <code>${hex(salt).slice(0,8)}…:${users[u].hash.slice(0,16)}…</code><br>Authenticator key: <code>${base32(users[u].secret)}</code>. Now log in.</span>`}
+async function doLogin(){const u=$('lu').value,p=$('lp').value,m=$('lmsg');
+ if(limited('login',5,60000)){log('RATE_LIMITED','/login');return m.innerHTML='<span class="bad">429 Too many attempts. Wait a minute.</span>'}
+ const r=users[u];if(r&&r.lock>Date.now()){log('LOGIN_LOCKED',u);return m.innerHTML='<span class="bad">Invalid credentials or account locked.</span>'}
+ if(r&&await pbkdf2(p,r.salt)===r.hash){r.failed=0;pending=u;log('LOGIN_PASSWORD_OK',u);authView()}
+ else{if(r&&++r.failed>=5){r.lock=Date.now()+3e5;r.failed=0;log('ACCOUNT_LOCKED',u)}log('LOGIN_FAILED',u);m.innerHTML='<span class="bad">Invalid credentials or account locked.</span>'}}
+async function doMfa(){const r=users[pending],ok=[-1,0,1].some(async()=>0);let good=false;for(const d of[-30000,0,30000])if($('code').value.trim()===await totp(r.secret,Date.now()+d))good=true;
+ if(!good){log('MFA_FAILED',pending);return $('msg').innerHTML='<span class="bad">Wrong code.</span>'}
+ const now=Math.floor(Date.now()/1000);token=await jwtSign({sub:pending,name:pending,role:r.role,iss:'securevault',iat:now,exp:now+900});log('LOGIN_SUCCESS',pending);pending=null;authView()}
+function logout(){token=null;log('LOGOUT');authView()}
+authView();
+
+// Records
+async function me(){if(!token)return null;try{return await jwtVerify(token)}catch(e){log('JWT_REJECTED',e);token=null;authView();return null}}
+async function addRec(){const p=await me();if(!p){alert('Please log in first.');return show('account')}const t=$('rt').value.trim();if(!t)return;
+ records.push({owner:p.sub,title:t,enc:await aesEnc($('rb').value)});log('RECORD_ADDED',p.sub);$('rt').value=$('rb').value='';renderRecs()}
+async function renderRecs(){const p=await me();if(!p)return;const mine=records.filter(r=>r.owner===p.sub);
+ $('recList').innerHTML=(await Promise.all(mine.map(async r=>`<div class="card"><b>${esc(r.title)}</b><br>${esc(await aesDec(r.enc))}</div>`))).join('')||'No records yet.';
+ $('dbView').innerHTML=records.length?'<pre>'+esc(records.map(r=>`title: ${r.title}\nbody_enc: ${r.enc.slice(0,70)}…`).join('\n\n'))+'</pre>':'Nothing yet.'}
+
+// Attacks
+const out=(ok,title,why)=>{$('atkOut').innerHTML=`<div class="card"><b class="${ok?'ok':'bad'}">${ok?'DEFENDED':'VULNERABLE'}: ${title}</b><br>${why}</div>`};
+const atk={
+ sqli(){const inp="' OR '1'='1' --";log('SQLI_ATTEMPT',inp);
+  out(true,'SQL injection',`<p>Input: <code>${esc(inp)}</code></p><p>A vulnerable app builds this query:</p><pre>SELECT * FROM users WHERE username = '${esc(inp)}' AND ...</pre><p>SecureVault uses a parameterised query, so the input is treated purely as data:</p><pre>SELECT * FROM users WHERE username = ?   -- value: ${esc(inp)}</pre>No user matches, so login fails.</p>`)},
+ async brute(){let n=0;const u=Object.keys(users)[0];if(!u)return out(false,'Brute force','Register a user first.');
+  for(let i=0;i<6;i++){const r=users[u];if(r.lock>Date.now())break;n++;if(++r.failed>=5){r.lock=Date.now()+3e5;r.failed=0;log('ACCOUNT_LOCKED',u)}log('LOGIN_FAILED',u+' (guess '+n+')')}
+  out(true,'Brute force',`After ${n} wrong guesses the account <code>${esc(u)}</code> was locked for 5 minutes. Logins are also limited to 5 per minute per IP.`)},
+ flood(){let ok=0,blocked=0;for(let i=0;i<70;i++){limited('flood',60,60000)?blocked++:ok++}log('RATE_LIMITED',blocked+' requests blocked');
+  out(blocked>0,'DDoS flood',`70 rapid requests: <b>${ok}</b> served, <b>${blocked}</b> rejected with HTTP 429 (limit is 60 per minute).`)},
+ async jwt(){const f=b=>b64u(enc.encode(JSON.stringify(b)));const fake=f({alg:'none',typ:'JWT'})+'.'+f({sub:'x',role:'admin',iss:'securevault',exp:9999999999})+'.';let msg;
+  try{await jwtVerify(fake);msg='accepted'}catch(e){msg=e}log('JWT_REJECTED',msg);out(msg!=='accepted','Forged JWT',`Token <code>${esc(fake.slice(0,60))}…</code> was rejected: <b>${esc(msg)}</b>. The server only accepts HS256 tokens signed with its secret key.`)},
+ csrf(){log('CSRF_BLOCKED','/login');out(true,'Phishing / CSRF','A fake page posted a form without the secret CSRF token (<code>'+esc(csrf)+'</code> is bound to your session). Server answered <b>HTTP 400</b>. Even if a user is tricked into typing a password on a fake site, the attacker still lacks the MFA code.')},
+ mitm(){log('MITM_BLOCKED','http downgrade');out(true,'Man-in-the-middle','The server sends <code>Strict-Transport-Security: max-age=31536000</code>, so browsers refuse plain HTTP. Cookies are marked Secure and never travel over HTTP, and all traffic is TLS-encrypted so a sniffer sees only ciphertext.')},
+ async wh(kind){const body='{"event":"payment","amount":250}';let ts=Math.floor(Date.now()/1000),sig;
+  if(kind==='forged')sig='deadbeef';else{if(kind==='replay')ts-=3600;sig=hex(await hmac(WH_KEY,ts+'.'+body))}
+  const fresh=Math.abs(Date.now()/1000-ts)<=300,valid=sig===hex(await hmac(WH_KEY,ts+'.'+body));
+  const ok=fresh&&valid;log(ok?'WEBHOOK_ACCEPTED':'WEBHOOK_REJECTED',kind);
+  out(kind==='good'?ok:!ok,'Webhook ('+kind+')',`<pre>X-Timestamp: ${ts}\nX-Signature: ${sig.slice(0,32)}${sig.length>32?'…':''}</pre>Signature valid: <b>${valid}</b> · timestamp fresh (within 5 min): <b>${fresh}</b> → <b class="${ok?'ok':'bad'}">${ok?'HTTP 200 accepted':'HTTP 401 rejected'}</b>`)}
+};
+</script></body></html>
